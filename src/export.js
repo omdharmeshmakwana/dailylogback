@@ -2,17 +2,21 @@ import { config } from './config.js'
 import { CHECK_IN, query } from './db.js'
 import { addDays, isWeekend, todayKey } from './dates.js'
 import { loadEods } from './eods.js'
-import { listProjects } from './projects.js'
-import { zip } from './zip.js'
 
-// "Export data": everything in the database as one CSV per area, zipped.
-// Labels match what the UI shows.
+// "Export data": EODs and attendance together in one CSV sheet. One row per
+// person per day, or one per work line on days with an EOD, each carrying
+// that day's attendance. Labels match what the UI shows.
 
 const ATTENDANCE_LABELS = { present: 'Present', absent: 'Absent', half: 'Half day', wfh: 'Work from home', leave: 'Leave', holiday: 'Holiday' }
 const OUTPUT_LABELS = {
   charsheet: 'Character sheet', location: 'Location image', storyboard: 'Storyboard', keyframe: 'Keyframe',
   clip: 'Clip from keyframes', lipsync: 'Lip-sync', extend: 'Extend clip', upscale: 'Upscale',
 }
+const HEADINGS = [
+  'Date', 'Day', 'Employee', 'Email', 'Attendance', 'Check-in', 'Attendance note',
+  'EOD', 'Submitted', 'Last edited', 'Project', 'Episode', 'Scene', 'Kind', 'Work status', 'Work type', 'Description', 'Outputs', 'Total outputs', "Tomorrow's plan", 'Remarks',
+]
+const EOD_DETAIL_COLUMNS = HEADINGS.length - HEADINGS.indexOf('EOD') - 1
 
 const WEEKDAY = new Intl.DateTimeFormat('en-GB', { weekday: 'long', timeZone: 'UTC' })
 const dayName = (key) => WEEKDAY.format(new Date(`${key}T00:00:00Z`))
@@ -31,35 +35,11 @@ function cell(value) {
 }
 
 // The BOM makes Excel read names and notes as UTF-8.
-const csv = (headings, rows) => `﻿${[headings, ...rows].map((row) => row.map(cell).join(',')).join('\r\n')}\r\n`
+const csv = (rows) => `﻿${[HEADINGS, ...rows].map((row) => row.map(cell).join(',')).join('\r\n')}\r\n`
 
-async function eodLogs() {
-  // Every EOD ever submitted; one row per work line so each output is visible.
-  const eods = await loadEods({ from: '2000-01-01', to: '9999-12-31' })
-  const rows = []
-  for (const eod of eods) {
-    const head = [eod.date, eod.employee.name, eod.employee.email, localTime(eod.submittedAt), localTime(eod.updatedAt)]
-    const notes = [eod.plan, eod.remarks]
-    if (!eod.entries.length) rows.push([...head, '', '', '', '', '', '', '', '', '', ...notes])
-    for (const entry of eod.entries) {
-      for (const line of entry.lines) {
-        const outputs = line.items.map((item) => `${OUTPUT_LABELS[item.k]} ${item.count}`).join('; ')
-        const total = line.items.reduce((sum, item) => sum + item.count, 0)
-        const type = line.type === 'clip' ? 'Clip' : 'Image'
-        rows.push([...head, entry.project, entry.episode, entry.scene, entry.kind, entry.status, type, line.text, outputs, total, ...notes])
-      }
-    }
-  }
-  return csv(
-    ['Date', 'Employee', 'Email', 'Submitted', 'Last edited', 'Project', 'Episode', 'Scene', 'Kind', 'Status', 'Work type', 'Description', 'Outputs', 'Total outputs', "Tomorrow's plan", 'Remarks'],
-    rows,
-  )
-}
-
-// Marked days for everyone, plus each active employee's unmarked working days
-// since they were added, which count as present (the Attendance page's rule).
-async function attendance(today) {
-  const [people, records, holidays] = await Promise.all([
+export async function exportSheet() {
+  const today = todayKey()
+  const [people, records, holidays, eods] = await Promise.all([
     query(
       `SELECT id, name, email, (created_at AT TIME ZONE $1)::date AS added
        FROM employees WHERE role = 'employee' AND active AND removed_at IS NULL`,
@@ -70,54 +50,52 @@ async function attendance(today) {
        FROM attendance a JOIN employees e ON e.id = a.employee_id`,
     ),
     query('SELECT holiday_date AS date FROM holidays'),
+    loadEods({ from: '2000-01-01', to: '9999-12-31' }),
   ])
-  const marked = new Set(records.rows.map((row) => `${row.employee_id}|${row.date}`))
-  const holidayDays = new Set(holidays.rows.map((row) => row.date))
 
-  const rows = records.rows.map((row) => [row.date, dayName(row.date), row.name, row.email, ATTENDANCE_LABELS[row.status], row.check_in, 'Marked'])
+  // Person-days: each active employee's working days since they were added
+  // (the Attendance page's rule), every marked day, and every EOD by anyone.
+  const days = new Map()
+  const day = (id, date, name, email) => {
+    const key = `${id}|${date}`
+    if (!days.has(key)) days.set(key, { date, name, email, record: null, eod: null })
+    return days.get(key)
+  }
   for (const person of people.rows) {
     for (let date = person.added; date <= today; date = addDays(date, 1)) {
-      if (isWeekend(date) || marked.has(`${person.id}|${date}`)) continue
-      const holiday = holidayDays.has(date)
-      rows.push([date, dayName(date), person.name, person.email, holiday ? 'Holiday' : 'Present', '', holiday ? 'Studio holiday' : 'Not marked (counts as present)'])
+      if (!isWeekend(date)) day(person.id, date, person.name, person.email)
     }
   }
-  rows.sort((a, b) => a[0].localeCompare(b[0]) || a[2].localeCompare(b[2]))
-  return csv(['Date', 'Day', 'Employee', 'Email', 'Status', 'Check-in', 'Source'], rows)
-}
+  for (const row of records.rows) day(row.employee_id, row.date, row.name, row.email).record = row
+  for (const eod of eods) day(eod.employee.id, eod.date, eod.employee.name, eod.employee.email).eod = eod
 
-async function employees() {
-  const { rows } = await query(
-    `SELECT name, email, role, active, (created_at AT TIME ZONE $1)::date AS added, (removed_at AT TIME ZONE $1)::date AS removed
-     FROM employees ORDER BY role DESC, created_at, name`,
-    [config.timezone],
-  )
-  return csv(
-    ['Name', 'Email', 'Role', 'Status', 'Added on', 'Removed on'],
-    rows.map((row) => [
-      row.name, row.email, row.role === 'manager' ? 'Manager' : 'Employee',
-      row.removed ? 'Removed' : row.active ? 'Active' : 'Inactive', row.added, row.removed,
-    ]),
-  )
-}
-
-async function projects() {
-  const rows = await listProjects()
-  return csv(['Project', 'Status', 'Episodes'], rows.map((row) => [row.name, row.archived ? 'Archived' : 'Active', row.episodes.join('; ')]))
-}
-
-async function holidays() {
-  const { rows } = await query('SELECT holiday_date AS date FROM holidays ORDER BY holiday_date')
-  return csv(['Date', 'Day'], rows.map((row) => [row.date, dayName(row.date)]))
-}
-
-export async function exportZip() {
-  const now = localTime(Date.now())
-  const contents = await Promise.all([eodLogs(), attendance(todayKey()), employees(), projects(), holidays()])
-  const names = ['eod-logs.csv', 'attendance.csv', 'employees.csv', 'projects.csv', 'holidays.csv']
-  return {
-    filename: `daily-log-export-${now.slice(0, 10)}.zip`,
-    // Zip timestamps have no timezone, so stamp the files with local wall-clock time.
-    data: zip(names.map((name, index) => ({ name, content: contents[index] })), new Date(`${now.replace(' ', 'T')}:00Z`)),
+  // Unmarked working days count as present, as on the Attendance page.
+  const holidayDays = new Set(holidays.rows.map((row) => row.date))
+  const attendance = ({ date, record }) => {
+    if (record) return [ATTENDANCE_LABELS[record.status], record.check_in, 'Marked']
+    if (isWeekend(date)) return ['Weekend', '', '']
+    if (holidayDays.has(date)) return ['Holiday', '', 'Studio holiday']
+    return ['Present', '', 'Not marked (counts as present)']
   }
+
+  const rows = []
+  const sorted = [...days.values()].sort((a, b) => a.date.localeCompare(b.date) || a.name.localeCompare(b.name))
+  for (const entry of sorted) {
+    const head = [entry.date, dayName(entry.date), entry.name, entry.email, ...attendance(entry)]
+    const { eod } = entry
+    if (!eod) {
+      rows.push([...head, entry.date > today ? '' : 'Not submitted', ...Array(EOD_DETAIL_COLUMNS).fill('')])
+      continue
+    }
+    const submitted = [...head, 'Submitted', localTime(eod.submittedAt), localTime(eod.updatedAt)]
+    const notes = [eod.plan, eod.remarks]
+    const lines = eod.entries.flatMap((scene) => scene.lines.map((line) => [scene, line]))
+    if (!lines.length) rows.push([...submitted, ...Array(EOD_DETAIL_COLUMNS - 4).fill(''), ...notes])
+    for (const [scene, line] of lines) {
+      const outputs = line.items.map((item) => `${OUTPUT_LABELS[item.k]} ${item.count}`).join('; ')
+      const total = line.items.reduce((sum, item) => sum + item.count, 0)
+      rows.push([...submitted, scene.project, scene.episode, scene.scene, scene.kind, scene.status, line.type === 'clip' ? 'Clip' : 'Image', line.text, outputs, total, ...notes])
+    }
+  }
+  return { filename: `daily-log-export-${today}.csv`, data: csv(rows) }
 }

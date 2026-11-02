@@ -27,9 +27,10 @@ router.get('/', requireAuth, requireManager, async (req, res) => {
   const start = periodStart(date, period)
 
   // Inactive and removed people are left out of the dashboard entirely.
+  // Managers are included so their EODs show, but see the summary below.
   const { rows: people } = await query(
-    `SELECT id, name, email FROM employees
-     WHERE role = 'employee' AND active AND removed_at IS NULL ${employee ? 'AND email = $1' : ''}
+    `SELECT id, name, email, role FROM employees
+     WHERE active AND removed_at IS NULL ${employee ? 'AND email = $1' : ''}
      ORDER BY created_at, name`,
     employee ? [employee] : [],
   )
@@ -52,19 +53,23 @@ router.get('/', requireAuth, requireManager, async (req, res) => {
   const eodBy = new Map(dayEods.map((eod) => [eod.employee.id, eod]))
 
   // A working day with no attendance mark means the person is expected in.
-  // Submitting an EOD always counts as present.
+  // Submitting an EOD always counts as present. EODs are optional for
+  // managers: they count only on days they submit one, and are never missed.
+  let counted = 0
   let present = 0
   let away = 0
   let submitted = 0
   const missed = []
   for (const person of people) {
+    const hasEod = eodBy.has(person.id)
+    if (person.role === 'manager' && !hasEod) continue
+    counted += 1
     const record = attendanceBy.get(person.id)
     const status = record?.status ?? (weekend ? null : isHoliday ? 'holiday' : 'present')
-    const hasEod = eodBy.has(person.id)
     if (ATTENDING.includes(status) || hasEod) {
       present += 1
       if (hasEod) submitted += 1
-      else missed.push({ ...person, status, checkIn: record?.check_in ?? null, reminderSentAt: remindedBy.get(person.id) ?? null })
+      else missed.push({ id: person.id, name: person.name, email: person.email, status, checkIn: record?.check_in ?? null, reminderSentAt: remindedBy.get(person.id) ?? null })
     } else if (AWAY.includes(status)) {
       away += 1
     }
@@ -137,7 +142,7 @@ router.get('/', requireAuth, requireManager, async (req, res) => {
     eodDue: config.eodDueTime,
     noWork,
     summary: {
-      people: people.length,
+      people: counted,
       present,
       away,
       submitted,

@@ -5,7 +5,7 @@ import { requireAuth, requireManager } from '../auth.js'
 import { config } from '../config.js'
 import { addDays, todayKey } from '../dates.js'
 import { query } from '../db.js'
-import { exportZip } from '../export.js'
+import { exportSheet } from '../export.js'
 
 const router = Router()
 
@@ -36,15 +36,15 @@ router.get('/download', async (req, res) => {
     res.status(403).type('text').send('This download link is no longer valid.')
     return
   }
-  const { filename, data } = await exportZip()
+  const { filename, data } = await exportSheet()
   res.attachment(filename).send(data)
 })
 
 router.use(requireAuth, requireManager)
 
-// All data as CSV files in one .zip download.
+// EODs and attendance as one CSV sheet.
 router.get('/', async (req, res) => {
-  const { filename, data } = await exportZip()
+  const { filename, data } = await exportSheet()
   res.attachment(filename).send(data)
 })
 

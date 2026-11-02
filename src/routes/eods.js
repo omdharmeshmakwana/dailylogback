@@ -3,7 +3,7 @@ import { requireAuth, requireManager } from '../auth.js'
 import { config } from '../config.js'
 import { query } from '../db.js'
 import { daysBetween, parseDate, todayKey } from '../dates.js'
-import { forbidden, badRequest } from '../errors.js'
+import { badRequest } from '../errors.js'
 import { filterEntries, loadEods, saveEod, validateEod } from '../eods.js'
 import { queryText } from '../validate.js'
 
@@ -28,9 +28,9 @@ router.get('/me', async (req, res) => {
   })
 })
 
-// Submit or edit today's EOD. Sending it again replaces the previous version.
+// Submit or edit today's EOD (employees and managers). Sending it again
+// replaces the previous version.
 router.put('/me', async (req, res) => {
-  if (req.user.role !== 'employee') throw forbidden('Only employees submit EODs.')
   const date = todayKey()
   const payload = await validateEod(req.body)
   const { created } = await saveEod(req.user.id, date, payload)
