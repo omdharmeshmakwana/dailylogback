@@ -9,6 +9,7 @@ import authRoutes from './routes/auth.js'
 import dashboardRoutes from './routes/dashboard.js'
 import employeeRoutes from './routes/employees.js'
 import eodRoutes from './routes/eods.js'
+import exportRoutes from './routes/export.js'
 import holidayRoutes from './routes/holidays.js'
 import projectRoutes from './routes/projects.js'
 import reminderRoutes from './routes/reminders.js'
@@ -23,7 +24,8 @@ const escape = (value) => value.replace(/[.+?^${}()|[\]\\]/g, '\\$&')
 const allowedOrigins = config.corsOrigins.includes('*')
   ? true
   : config.corsOrigins.map((origin) => (origin.includes('*') ? new RegExp(`^${origin.split('*').map(escape).join('[^./]*')}$`) : origin))
-app.use(cors({ origin: allowedOrigins }))
+// Content-Disposition is exposed so the UI can name the export download.
+app.use(cors({ origin: allowedOrigins, exposedHeaders: ['Content-Disposition'] }))
 app.use(express.json({ limit: '200kb' }))
 
 app.get('/', (req, res) => {
@@ -54,6 +56,7 @@ app.use('/api/dashboard', dashboardRoutes)
 app.use('/api/attendance', attendanceRoutes)
 app.use('/api/holidays', holidayRoutes)
 app.use('/api/reminders', reminderRoutes)
+app.use('/api/export', exportRoutes)
 
 app.use((req, res) => {
   res.status(404).json({ error: `No route for ${req.method} ${req.path}.` })

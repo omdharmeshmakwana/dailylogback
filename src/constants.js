@@ -7,6 +7,7 @@ export const OUTPUTS = {
 export const OUTPUT_KEYS = [...OUTPUTS.image, ...OUTPUTS.clip]
 export const KINDS = ['Fresh', 'Revision', 'Test', 'Trailer', 'Training']
 export const STATUSES = ['In progress', 'Sent for approval', 'On hold', 'Done']
+export const ROLES = ['employee', 'manager']
 export const ATTENDANCE_STATUSES = ['present', 'absent', 'half', 'wfh', 'leave', 'holiday']
 export const ATTENDING = ['present', 'half', 'wfh']
 export const AWAY = ['absent', 'leave']
