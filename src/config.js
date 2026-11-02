@@ -11,8 +11,8 @@ const databaseUrl = required('DATABASE_URL')
 
 const keepAliveUrl = process.env.KEEP_ALIVE_URL || process.env.RENDER_EXTERNAL_URL || ''
 
-const eodDueTime = process.env.EOD_DUE_TIME || '18:30'
-if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(eodDueTime)) throw new Error('EOD_DUE_TIME must look like 18:30.')
+const eodDueTime = process.env.EOD_DUE_TIME || '20:00'
+if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(eodDueTime)) throw new Error('EOD_DUE_TIME must look like 20:00.')
 
 export const config = {
   port: Number(process.env.PORT) || 4000,
