@@ -2,6 +2,7 @@ import { config } from './config.js'
 import { CHECK_IN, query } from './db.js'
 import { addDays, isWeekend, todayKey } from './dates.js'
 import { loadEods } from './eods.js'
+import { schemaReady } from './schema.js'
 
 // "Export data": EODs and attendance together in one CSV sheet. One row per
 // person per day, or one per work line on days with an EOD, each carrying
@@ -37,9 +38,14 @@ function cell(value) {
 // The BOM makes Excel read names and notes as UTF-8.
 const csv = (rows) => `﻿${[HEADINGS, ...rows].map((row) => row.map(cell).join(',')).join('\r\n')}\r\n`
 
+// The manager's note for the month rides along in Remarks, after the
+// employee's own remarks, so the sheet keeps the same columns.
+const remarks = (own, note) => [own, note && `Manager note: ${note}`].filter(Boolean).join(' · ')
+
 export async function exportSheet() {
   const today = todayKey()
-  const [people, records, holidays, eods] = await Promise.all([
+  await schemaReady()
+  const [people, records, holidays, eods, notes] = await Promise.all([
     query(
       `SELECT id, name, email, (created_at AT TIME ZONE $1)::date AS added
        FROM employees WHERE role = 'employee' AND active AND removed_at IS NULL`,
@@ -51,14 +57,16 @@ export async function exportSheet() {
     ),
     query('SELECT holiday_date AS date FROM holidays'),
     loadEods({ from: '2000-01-01', to: '9999-12-31' }),
+    query(`SELECT employee_id, to_char(month, 'YYYY-MM') AS month, note FROM attendance_notes`),
   ])
+  const monthNotes = new Map(notes.rows.map((row) => [`${row.employee_id}|${row.month}`, row.note]))
 
   // Person-days: each active employee's working days since they were added
   // (the Attendance page's rule), every marked day, and every EOD by anyone.
   const days = new Map()
   const day = (id, date, name, email) => {
     const key = `${id}|${date}`
-    if (!days.has(key)) days.set(key, { date, name, email, record: null, eod: null })
+    if (!days.has(key)) days.set(key, { id, date, name, email, record: null, eod: null })
     return days.get(key)
   }
   for (const person of people.rows) {
@@ -83,12 +91,13 @@ export async function exportSheet() {
   for (const entry of sorted) {
     const head = [entry.date, dayName(entry.date), entry.name, entry.email, ...attendance(entry)]
     const { eod } = entry
+    const note = monthNotes.get(`${entry.id}|${entry.date.slice(0, 7)}`)
     if (!eod) {
-      rows.push([...head, entry.date > today ? '' : 'Not submitted', ...Array(EOD_DETAIL_COLUMNS).fill('')])
+      rows.push([...head, entry.date > today ? '' : 'Not submitted', ...Array(EOD_DETAIL_COLUMNS - 1).fill(''), remarks('', note)])
       continue
     }
     const submitted = [...head, 'Submitted', localTime(eod.submittedAt), localTime(eod.updatedAt)]
-    const notes = [eod.plan, eod.remarks]
+    const notes = [eod.plan, remarks(eod.remarks, note)]
     const lines = eod.entries.flatMap((scene) => scene.lines.map((line) => [scene, line]))
     if (!lines.length) rows.push([...submitted, ...Array(EOD_DETAIL_COLUMNS - 4).fill(''), ...notes])
     for (const [scene, line] of lines) {

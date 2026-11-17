@@ -5,6 +5,7 @@ import { pool, query } from './db.js'
 import { todayKey } from './dates.js'
 import { HttpError } from './errors.js'
 import { startKeepAlive } from './keepAlive.js'
+import { schemaReady } from './schema.js'
 import attendanceRoutes from './routes/attendance.js'
 import authRoutes from './routes/auth.js'
 import dashboardRoutes from './routes/dashboard.js'
@@ -77,6 +78,7 @@ app.use((error, req, res, next) => {
 const server = app.listen(config.port, () => {
   console.log(`Daily Log API listening on port ${config.port} (timezone ${config.timezone}, today ${todayKey()})`)
   startKeepAlive()
+  schemaReady().catch((error) => console.error('Could not create new tables yet (will retry on use):', error.message))
 })
 
 // Render sends SIGTERM on every deploy; finish in-flight requests first.

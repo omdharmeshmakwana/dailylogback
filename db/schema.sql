@@ -120,6 +120,18 @@ CREATE TABLE IF NOT EXISTS holidays (
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- A manager's note on one person for one month: the pencil next to their name
+-- on the Attendance page. The export puts it in that month's Remarks column.
+-- (The API also creates this table on startup; see src/schema.js.)
+CREATE TABLE IF NOT EXISTS attendance_notes (
+  employee_id  UUID NOT NULL REFERENCES employees (id),
+  month        DATE NOT NULL CHECK (extract(day FROM month) = 1),
+  note         TEXT NOT NULL CHECK (length(note) BETWEEN 1 AND 2000),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_by   UUID REFERENCES employees (id),
+  PRIMARY KEY (employee_id, month)
+);
+
 -- ---------------------------------------------------------------------------
 -- EOD reminders sent from the dashboard
 -- ---------------------------------------------------------------------------
